@@ -183,3 +183,9 @@ class ServeTTSRequest(BaseModel):
     class Config:
         # Allow arbitrary types for pytorch related types
         arbitrary_types_allowed = True
+
+
+# NOTE: references is ignored
+class ServeGenerateRequest(ServeTTSRequest):
+    prompt_tokens: list[list[list[int]]] = []
+    prompt_texts: list[str] = []

@@ -31,3 +31,7 @@ asr-label*
 /faster_whisper
 /.gradio
 *log
+venv
+main.exp
+main.lib
+main.obj

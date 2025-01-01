@@ -37,6 +37,8 @@ class TTSInferenceEngine(ReferenceLoader, VQManager):
         self.precision = precision
         self.compile = compile
 
+    
+
     @torch.inference_mode()
     def inference(self, req: ServeTTSRequest) -> Generator[InferenceResult, None, None]:
         """

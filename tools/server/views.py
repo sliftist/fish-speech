@@ -11,10 +11,12 @@ from kui.asgi import Body, HTTPException, JSONResponse, Routes, StreamResponse, 
 from loguru import logger
 from typing_extensions import Annotated
 
+from tools.llama.generate import WrappedGenerateResponse
 from tools.schema import (
     ServeASRRequest,
     ServeASRResponse,
     ServeChatRequest,
+    ServeGenerateRequest,
     ServeTTSRequest,
     ServeVQGANDecodeRequest,
     ServeVQGANDecodeResponse,
@@ -29,7 +31,8 @@ from tools.server.api_utils import (
 )
 from tools.server.inference import inference_wrapper as inference
 from tools.server.model_manager import ModelManager
-from tools.server.model_utils import batch_asr, cached_vqgan_batch_encode, vqgan_decode
+from tools.server.model_utils import batch_asr, cached_vqgan_batch_encode
+import tools.server.model_utils
 
 MAX_NUM_SAMPLES = int(os.getenv("NUM_SAMPLES", 1))
 
@@ -68,7 +71,7 @@ async def vqgan_decode(req: Annotated[ServeVQGANDecodeRequest, Body(exclusive=Tr
     # Decode the audio
     tokens = [torch.tensor(token, dtype=torch.int) for token in req.tokens]
     start_time = time.time()
-    audios = vqgan_decode(decoder_model, tokens)
+    audios = tools.server.model_utils.vqgan_decode(decoder_model, tokens)
     logger.info(f"[EXEC] VQGAN decode time: {(time.time() - start_time) * 1000:.2f}ms")
     audios = [audio.astype(np.float16).tobytes() for audio in audios]
 
@@ -154,6 +157,42 @@ async def tts(req: Annotated[ServeTTSRequest, Body(exclusive=True)]):
             },
             content_type=get_content_type(req.format),
         )
+
+
+
+# `Model tokens + model text + target text => target tokens`
+@routes.http.post("/v1/generate")
+async def generate(req: Annotated[ServeGenerateRequest, Body(exclusive=True)]):
+    # NOTE: generate only uses these parameters:
+    # REQUIRED: text, prompt_tokens, prompt_texts
+    # max_new_tokens, normalize, top_p, repetition_penalty, temperature, chunk_length
+    # TODO: Support streaming as well
+
+    app_state = request.app.state
+    model_manager: ModelManager = app_state.model_manager
+    engine = model_manager.tts_inference_engine
+    # Convert prompt tokens to torch tensors, from list[list[list[int]]] to list[torch.tensor]
+    #   with the tensors 2D
+    prompt_tokens = [
+        torch.tensor(tokens, dtype=torch.int) for tokens in req.prompt_tokens
+    ]
+    response_queue = engine.send_Llama_request(req, prompt_tokens, req.prompt_texts)
+    wrapped_result: WrappedGenerateResponse = response_queue.get()
+    if wrapped_result.status == "error":
+        raise HTTPException(
+            HTTPStatus.INTERNAL_SERVER_ERROR,
+            content=f"Error: {wrapped_result.response}",
+        )
+    codes = wrapped_result.response.codes
+    # Convert codes from list[torch.tensor] to list[list[list[int]]]
+    codes = [code.tolist() for code in codes]
+    
+    return ormsgpack.packb(
+        {
+            "generated": codes,
+        },
+        option=ormsgpack.OPT_SERIALIZE_PYDANTIC,
+    )
 
 
 @routes.http.post("/v1/chat")
